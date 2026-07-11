@@ -1,0 +1,40 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main # Change par 'master' si ta branche principale s'appelle ainsi
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Enable Windows desktop support
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows Application
+        run: flutter build windows --release
+
+      - name: Upload Artifacts (Dossier Release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-app
+          path: build/windows/x64/runner/Release/
