@@ -1,0 +1,30 @@
+name: ytdlp
+description: "Application Flutter de téléchargement avec yt-dlp et FFmpeg."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.3 # Pour trouver les dossiers système cachés/locaux
+  path: ^1.9.0 # Pour manipuler les chemins de fichiers (p.join)
+  dio: ^5.4.3 # Téléchargement robuste avec suivi des octets
+  archive: ^3.6.1 # Extraction de yt-dlp et ffmpeg (.zip / .tar.xz)
+  file_picker: ^8.0.0
+  shared_preferences: ^2.2.3
+  drift: ^2.20.0 # ORM SQLite type-safe pour Flutter
+  sqlite3_flutter_libs: ^0.5.0 # Librairies SQLite natives (Linux/Windows/macOS/Android/iOS)
+  #flutter_inappwebview: ^6.2.0-beta.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  drift_dev: ^2.20.0 # Générateur de code Drift
+  build_runner: ^2.4.0 # Runner pour la génération de code
+
+flutter:
+  uses-material-design: true
