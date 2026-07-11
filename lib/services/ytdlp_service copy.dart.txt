@@ -1,0 +1,328 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import '../models/video_metadata.dart';
+import 'component_manager.dart';
+import 'database/app_database.dart';
+import 'database/cache_dao.dart';
+
+class YtdlpService {
+  /// Dernière erreur survenue lors de l'analyse, lisible par l'UI.
+  static String? lastError;
+
+  static Future<VideoMetadata?> fetchVideoInfo(String url,
+      {int page = 1,
+      int itemsPerPage = 5,
+      required bool isPlaylistRequest}) async {
+    lastError = null;
+    try {
+      // ── Cache hit (vidéo unique uniquement) ──────────────────────────────
+      if (!isPlaylistRequest) {
+        final cached = await database.getCachedMetadata(url);
+        if (cached != null) return cached;
+      }
+
+      final folder = await ComponentManager.getTargetFolderPath();
+      final ytdlpPath = p.join(folder, ComponentManager.getYtdlpFileName());
+
+      if (isPlaylistRequest) {
+        int startIndex = (page - 1) * itemsPerPage + 1;
+        int endIndex = page * itemsPerPage;
+
+        List<String> args = [
+          '--dump-json',
+          '--flat-playlist',
+          '--write-thumbnail',
+          '--playlist-items',
+          '$startIndex-$endIndex',
+          url
+        ];
+
+        ProcessResult result = await Process.run(ytdlpPath, args);
+
+        // Mécanisme de retry en cas de 403 (Accès refusé)
+        if (result.exitCode != 0 && result.stderr.toString().contains('403')) {
+          debugPrint("[YtdlpService] Erreur 403 détectée, tentative avec des headers de contournement...");
+          result = await Process.run(ytdlpPath, [
+            ...args.sublist(0, args.length - 1),
+            '--impersonate', 'chrome',
+            url
+          ]);
+        }
+
+        if (result.exitCode != 0) {
+          lastError = _extractUserFriendlyError(result.stderr.toString());
+          return null;
+        }
+
+        final List<String> lines =
+            const LineSplitter().convert(result.stdout);
+        Map<String, dynamic>? playlistInfo;
+        List<Map<String, dynamic>> entries = [];
+
+        for (var line in lines) {
+          if (line.trim().isEmpty) continue;
+          try {
+            final decodedLine = jsonDecode(line) as Map<String, dynamic>;
+            if (decodedLine['_type'] == 'url' || decodedLine['url'] != null) {
+              entries.add(decodedLine);
+            } else if (decodedLine['_type'] == 'playlist') {
+              playlistInfo = decodedLine;
+            }
+          } catch (_) {}
+        }
+
+        if (playlistInfo != null) {
+          playlistInfo['entries'] = entries;
+          return VideoMetadata.fromJson(playlistInfo);
+        }
+        if (entries.isNotEmpty) {
+          return VideoMetadata.fromJson({
+            '_type': 'playlist',
+            'title': 'Liste de lecture',
+            'entries': entries
+          });
+        }
+
+        lastError = "Aucune vidéo trouvée dans cette playlist.";
+        return null;
+      } else {
+        // ── Extraction détaillée pour une vidéo unique ────────────────────
+        List<String> args = ['--dump-json', url];
+        ProcessResult result = await Process.run(ytdlpPath, args);
+
+        // Mécanisme de retry en cas de 403
+        if (result.exitCode != 0 && result.stderr.toString().contains('403')) {
+          debugPrint("[YtdlpService] Erreur 403 détectée, tentative avec des headers de contournement...");
+          result = await Process.run(ytdlpPath, [
+            '--dump-json',
+            '--impersonate', 'chrome',
+            url
+          ]);
+        }
+
+        if (result.exitCode != 0) {
+          lastError = _extractUserFriendlyError(result.stderr.toString());
+          return null;
+        }
+
+        // ── Parsing JSON robuste ──────────────────────────────────────────
+        // yt-dlp peut émettre des avertissements avant le JSON réel.
+        // On cherche la première ligne valide débutant par '{'.
+        final lines = const LineSplitter().convert(result.stdout.toString());
+        String jsonStr = '';
+
+        for (var line in lines) {
+          if (line.trim().startsWith('{')) {
+            jsonStr = line.trim();
+            break;
+          }
+        }
+
+        // Fallback : essayer le stdout entier si aucune ligne isolée trouvée
+        if (jsonStr.isEmpty) {
+          jsonStr = result.stdout.toString().trim();
+        }
+
+        if (jsonStr.isEmpty) {
+          lastError = "Aucune donnée reçue de yt-dlp.";
+          return null;
+        }
+
+        late Map<String, dynamic> decoded;
+        try {
+          decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
+        } catch (e) {
+          lastError = "Impossible de lire la réponse de yt-dlp.";
+          debugPrint("JSON parse error: $e");
+          return null;
+        }
+
+        final rawMetadata = VideoMetadata.fromJson(decoded);
+
+        // ── Simplification des formats ────────────────────────────────────
+        List<FileFormat> simplifiedFormats = [];
+
+        // 1. Option MP3 (toujours disponible)
+        simplifiedFormats.add(FileFormat(
+            formatId: 'bestaudio/best',
+            ext: 'mp3',
+            vcodec: 'none',
+            acodec: 'mp3',
+            height: null));
+
+        // 2. Résolutions vidéo avec hauteur connue (YouTube, etc.)
+        final resolutions = rawMetadata.formats
+            .where((f) => f.height != null && f.vcodec != 'none')
+            .map((f) => f.height!)
+            .toSet()
+            .toList();
+        resolutions.sort((a, b) => b.compareTo(a));
+
+        for (var height in resolutions) {
+          simplifiedFormats.add(FileFormat(
+              formatId: 'bestvideo[height<=$height]+bestaudio/best',
+              ext: 'mp4',
+              vcodec: 'h264',
+              acodec: 'aac',
+              height: height));
+        }
+
+        // 3. FALLBACK : sites sans hauteur (Vimeo, Dailymotion, Twitch, etc.)
+        //    Si aucune résolution détectée, on propose des options génériques.
+        if (resolutions.isEmpty) {
+          // Option "Meilleure qualité" universelle
+          simplifiedFormats.add(FileFormat(
+              formatId: 'bv*+ba/b',
+              ext: 'mp4',
+              vcodec: 'any',
+              acodec: 'any',
+              height: null,
+              displayLabel: 'Meilleure qualité (MP4)'));
+
+          // Extensions alternatives trouvées dans les formats bruts
+          final videoFormats = rawMetadata.formats
+              .where((f) =>
+                  f.vcodec != 'none' &&
+                  f.vcodec.isNotEmpty &&
+                  f.ext.isNotEmpty &&
+                  f.ext != 'mp4')
+              .map((f) => f.ext)
+              .toSet()
+              .toList();
+
+          for (var ext in videoFormats) {
+            simplifiedFormats.add(FileFormat(
+                formatId: 'bv*[ext=$ext]+ba/bv*+ba/b',
+                ext: ext,
+                vcodec: 'any',
+                acodec: 'any',
+                height: null,
+                displayLabel: 'Meilleure qualité (${ext.toUpperCase()})'));
+          }
+        }
+
+        final finalMeta = rawMetadata.copyWith(formats: simplifiedFormats);
+
+        // ── Mise en cache ─────────────────────────────────────────────────
+        await database.cacheMetadata(url, finalMeta);
+        return finalMeta;
+      }
+    } catch (e) {
+      lastError = "Erreur inattendue : $e";
+      debugPrint("Erreur d'analyse : $e");
+    }
+    return null;
+  }
+
+  static Future<Process> downloadVideo({
+    required String url,
+    required String targetFolder,
+    FileFormat? format,
+    required Function(double) onProgress,
+    required Function() onComplete,
+  }) async {
+    final binFolder = await ComponentManager.getTargetFolderPath();
+    final ytdlpPath = p.join(binFolder, ComponentManager.getYtdlpFileName());
+    final ffmpegPath = p.join(binFolder, ComponentManager.getFfmpegFileName());
+
+    List<String> arguments = ['--ffmpeg-location', ffmpegPath];
+
+    // Logique améliorée pour la sélection du format
+    if (format?.ext == 'mp3') {
+      // Cas spécifique pour l'extraction audio en MP3
+      arguments.addAll(['--extract-audio', '--audio-format', 'mp3']);
+    } else if (format != null) {
+      // Cas pour les formats vidéo
+      String formatArg = format.formatId;
+      arguments.addAll(['-f', formatArg, '--merge-output-format', 'mp4']);
+    } else {
+      // Cas par défaut : meilleure vidéo + meilleur audio
+      arguments.addAll(['-f', 'bv*+ba/b', '--merge-output-format', 'mp4']);
+    }
+
+    // Utilisation de curl-cffi pour éviter les 403, et support natif HLS
+    arguments.addAll([
+      '--impersonate', 'chrome',
+      '--hls-prefer-native', // Meilleure stabilité pour les flux m3u8
+      '--concurrent-fragments', '4' // Accélération du téléchargement HLS
+    ]);
+
+    arguments.add(url);
+
+    final process = await Process.start(ytdlpPath, arguments,
+        workingDirectory: targetFolder);
+
+    process.stdout.transform(utf8.decoder).listen((data) {
+      RegExp regExp = RegExp(r"\[download\]\s+(\d+\.\d+)%");
+      var match = regExp.firstMatch(data);
+      if (match != null) {
+        double pct = double.parse(match.group(1)!) / 100;
+        onProgress(pct);
+      }
+    });
+
+    process.exitCode.then((_) => onComplete());
+    return process;
+  }
+
+  // ── Extraction d'un message d'erreur lisible ────────────────────────────
+  static String _extractUserFriendlyError(String stderr) {
+    if (stderr.isEmpty) {
+      return "Analyse échouée. Vérifiez l'URL et réessayez.";
+    }
+
+    // Messages spécifiques courants de yt-dlp
+    if (stderr.contains('Unsupported URL')) {
+      return "URL non supportée par yt-dlp. Ce site n'est peut-être pas compatible.";
+    }
+    if (stderr.contains('Unable to extract') || stderr.contains('No video formats')) {
+      return "Impossible d'extraire les informations de cette vidéo.";
+    }
+    if (stderr.contains('Private video') || stderr.contains('Video unavailable')) {
+      return "Cette vidéo est privée ou indisponible.";
+    }
+    if (stderr.contains('age') && stderr.contains('restricted')) {
+      return "Cette vidéo est restreinte par âge.";
+    }
+    if (stderr.contains('Sign in') || stderr.contains('login')) {
+      return "Cette vidéo nécessite une connexion pour être accessible.";
+    }
+    if (stderr.contains('No such file') || stderr.contains('not found')) {
+      return "yt-dlp introuvable. Veuillez réinstaller les composants.";
+    }
+    if (stderr.contains('HTTP Error 403')) {
+      return "Accès refusé (HTTP 403). La vidéo est peut-être protégée.";
+    }
+    if (stderr.contains('HTTP Error 404')) {
+      return "Vidéo introuvable (HTTP 404). Vérifiez l'URL.";
+    }
+    if (stderr.contains('Connection') || stderr.contains('network')) {
+      return "Erreur réseau. Vérifiez votre connexion internet.";
+    }
+
+    // Extraire la dernière ligne d'erreur significative
+    final errorLines = stderr
+        .split('\n')
+        .where((l) =>
+            l.trim().isNotEmpty &&
+            (l.contains('ERROR') || l.contains('error') || l.contains('Error')))
+        .toList();
+
+    if (errorLines.isNotEmpty) {
+      final msg = errorLines.last.replaceAll(RegExp(r'ERROR:\s*'), '').trim();
+      return msg.length > 120 ? '${msg.substring(0, 120)}...' : msg;
+    }
+
+    // Dernière ligne non vide comme fallback
+    final lines =
+        stderr.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isNotEmpty) {
+      final last = lines.last.trim();
+      return last.length > 120 ? '${last.substring(0, 120)}...' : last;
+    }
+
+    return "Analyse échouée. Vérifiez l'URL et réessayez.";
+  }
+}
