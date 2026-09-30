@@ -135,7 +135,7 @@ class PlaylistVideoCard extends StatelessWidget {
           ),
 
           // ── Barre de progression si en cours ──
-          if (isDownloading) _DownloadProgressBar(onCancel: onCancelDownload),
+          if (isDownloading) _DownloadProgressBar(url: video.url, onCancel: onCancelDownload),
 
           // ── Chargement des détails ──
           if (isAnalyzingItem && !hasDetails)
@@ -293,13 +293,14 @@ class _StatusBadge extends StatelessWidget {
 }
 
 class _DownloadProgressBar extends StatelessWidget {
+  final String url;
   final VoidCallback onCancel;
-  const _DownloadProgressBar({required this.onCancel});
+  const _DownloadProgressBar({required this.url, required this.onCancel});
 
   @override
   Widget build(BuildContext context) {
     final double progress =
-        MainScreenState.activeTaskProgress;
+        MainScreenState.getTaskProgressForUrl(url);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 10, 10, 4),

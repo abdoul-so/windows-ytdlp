@@ -340,9 +340,30 @@ class _SingleVideoViewState extends State<SingleVideoView> {
                           initialValue: _selectedFormat,
                           items: _metadata!.formats.map((f) {
                             final sizeStr = f.formattedSize;
+                            final isStream = ['m3u8', 'ts', 'm4s'].contains(f.ext.toLowerCase());
                             return DropdownMenuItem<FileFormat>(
                               value: f,
-                              child: Text("${f.label} ($sizeStr)"),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(child: Text("${f.label} ($sizeStr)")),
+                                  if (isStream)
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 8),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange.shade700,
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: const Text(
+                                          'Stream direct',
+                                          style: TextStyle(color: Colors.white, fontSize: 11),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             );
                           }).toList(),
                           onChanged: (val) {

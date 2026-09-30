@@ -245,7 +245,7 @@ class _PlaylistViewState extends State<PlaylistView> {
                   final video = paginatedVideos[index];
                   final isChecked = _selectedUrls.contains(video.url);
                   final isDownloading =
-                      MainScreenState.activeTaskUrl == video.url;
+                      MainScreenState.isUrlDownloading(video.url);
 
                   if (isChecked &&
                       !_detailedMetadata.containsKey(video.url) &&
@@ -274,8 +274,8 @@ class _PlaylistViewState extends State<PlaylistView> {
                     },
                     onFormatChanged: (val) =>
                         setState(() => _selectedFormats[video.url] = val),
-                    onCancelDownload: () => MainScreen.cancelGlobalDownload(
-                        context, () => setState(() {})),
+                    onCancelDownload: () => MainScreenState.cancelTaskByUrl(
+                        context, video.url, () => setState(() {})),
                   );
                 },
               ),

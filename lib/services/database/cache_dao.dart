@@ -18,7 +18,7 @@ extension CacheDao on AppDatabase {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final ttlSec = kCacheTtl.inSeconds;
 
-    final row = await (select(metadataCacheTable)
+    final row = await (select(cacheTable)
           ..where((t) => t.url.equals(url))
           ..where((t) => t.cachedAt.isBiggerOrEqualValue(nowSec - ttlSec))
           ..limit(1))
@@ -27,18 +27,9 @@ extension CacheDao on AppDatabase {
     if (row == null) return null;
 
     try {
-      final formatsRaw =
-          jsonDecode(row.formatsJson) as List<dynamic>;
-      final formats = formatsRaw
-          .map((f) => FileFormat.fromJson(f as Map<String, dynamic>))
-          .toList();
-
+      final decoded = jsonDecode(row.metadataJson) as Map<String, dynamic>;
       debugPrint('[Cache] HIT pour : $url');
-      return VideoMetadata(
-        title: row.title,
-        thumbnail: row.thumbnail,
-        formats: formats,
-      );
+      return VideoMetadata.fromJson(decoded);
     } catch (e) {
       debugPrint('[Cache] Erreur de désérialisation : $e');
       return null;
@@ -49,17 +40,14 @@ extension CacheDao on AppDatabase {
 
   /// Met en cache les métadonnées d'une vidéo (INSERT OR REPLACE).
   Future<void> cacheMetadata(String url, VideoMetadata meta) async {
-    final formatsJson = jsonEncode(
-      meta.formats.map((f) => _formatToJson(f)).toList(),
-    );
-
-    await into(metadataCacheTable).insertOnConflictUpdate(
-      MetadataCacheTableCompanion.insert(
+    final formatsJson = jsonEncode(meta.toJson());
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    await (delete(cacheTable)..where((t) => t.url.equals(url))).go();
+    await into(cacheTable).insert(
+      CacheTableCompanion.insert(
         url: url,
-        title: meta.title,
-        thumbnail: Value(meta.thumbnail),
-        formatsJson: formatsJson,
-        cachedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        metadataJson: formatsJson,
+        cachedAt: Value(now),
       ),
     );
     debugPrint('[Cache] MISS → mis en cache : $url');
@@ -71,24 +59,13 @@ extension CacheDao on AppDatabase {
   Future<int> pruneExpiredCache() {
     final expiredBefore =
         DateTime.now().millisecondsSinceEpoch ~/ 1000 - kCacheTtl.inSeconds;
-    return (delete(metadataCacheTable)
-          ..where((t) => t.cachedAt.isSmallerThanValue(expiredBefore)))
-        .go();
+      return (delete(cacheTable)
+        ..where((t) => t.cachedAt.isSmallerThanValue(expiredBefore)))
+      .go();
   }
 
   /// Vide tout le cache (utile pour forcer un rafraîchissement).
   Future<int> clearCache() {
-    return delete(metadataCacheTable).go();
+    return delete(cacheTable).go();
   }
 }
-
-// ── Sérialisation FileFormat → JSON ──────────────────────────────────────────
-Map<String, dynamic> _formatToJson(FileFormat f) => {
-      'format_id': f.formatId,
-      'ext': f.ext,
-      'filesize': f.filesize,
-      'height': f.height,
-      'vcodec': f.vcodec,
-      'acodec': f.acodec,
-      'display_label': f.displayLabel,
-    };

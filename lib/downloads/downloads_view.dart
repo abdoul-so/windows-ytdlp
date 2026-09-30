@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Requis pour Clipboard
 import 'package:ytdlp/models/download_task.dart';
 import '../services/database/app_database.dart';
-import '../services/database/history_dao.dart';
 
 class DownloadsView extends StatelessWidget {
   final List<Map<String, dynamic>> history;
   final List<DownloadTask> queue;
   final Function(DownloadTask) onTogglePause;
+  final Function(DownloadTask) onCancelTask;
   final Function(Map<String, dynamic>) onReDownload;
   final VoidCallback onClearHistory;
   final VoidCallback onRefreshHistory;
@@ -20,6 +20,7 @@ class DownloadsView extends StatelessWidget {
     required this.history,
     required this.queue,
     required this.onTogglePause,
+    required this.onCancelTask,
     required this.onReDownload,
     required this.onClearHistory,
     required this.onRefreshHistory,
@@ -194,15 +195,32 @@ class DownloadsView extends StatelessWidget {
                         ),
                       ],
                     ),
-                    trailing: IconButton(
-                      icon: Icon(
-                        isDownloading
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        color: isDownloading ? Colors.orange : Colors.green,
-                      ),
-                      tooltip: isDownloading ? "Mettre en pause" : "Reprendre",
-                      onPressed: () => onTogglePause(task),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            isDownloading
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            color: isDownloading ? Colors.orange : Colors.green,
+                          ),
+                          tooltip: isDownloading ? "Mettre en pause" : "Reprendre",
+                          onPressed: () => onTogglePause(task),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_forever_rounded,
+                              color: Colors.redAccent, size: 22),
+                          tooltip: "Annuler et supprimer le fichier",
+                          onPressed: () => onCancelTask(task),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.content_copy_rounded,
+                              color: Colors.blueAccent, size: 20),
+                          tooltip: "Copier l'URL de la vidéo",
+                          onPressed: () => _copyToClipboard(context, task.url),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -251,7 +269,10 @@ class DownloadsView extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.red,
                                   foregroundColor: Colors.white),
-                              onPressed: onClearHistory,
+                              onPressed: () {
+                                onClearHistory();
+                                Navigator.of(ctx).pop();
+                              },
                               child: const Text("Effacer"),
                             ),
                           ],

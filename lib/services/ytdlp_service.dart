@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/video_metadata.dart';
 import 'component_manager.dart';
 import 'database/app_database.dart';
@@ -8,6 +9,36 @@ import 'database/cache_dao.dart';
 
 class YtdlpService {
   static String? lastError;
+
+  /// Détecte rapidement si une URL pointe directement vers un média (mp4, m3u8, ts, etc.)
+  static bool isDirectMediaUrl(String url) {
+    final lower = url.toLowerCase();
+    if (lower.contains('/contents/') ||
+        lower.contains('.mp4') ||
+        lower.contains('.m3u8') ||
+        lower.contains('.ts') ||
+        lower.contains('.m4s') ||
+        lower.contains('file=')) {
+      return true;
+    }
+    try {
+      final uri = Uri.parse(url);
+      final path = uri.path.toLowerCase();
+      if (path.endsWith('.mp4') || path.endsWith('.m3u8') || path.endsWith('.webm')) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  static Future<List<String>> _getCustomArgs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final customArgsRaw = prefs.getString('ytdlp_custom_args') ?? '';
+      if (customArgsRaw.trim().isEmpty) return [];
+      return customArgsRaw.split(' ').where((s) => s.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
+  }
 
   /// Wrapper de compatibilité pour récupérer les métadonnées automatiquement
   static Future<VideoMetadata> getMetadata(String url) async {
@@ -56,6 +87,7 @@ class YtdlpService {
 
       final folder = await ComponentManager.getTargetFolderPath();
       final (executable, initialArgs) = _getVenvCommand(folder);
+      final customArgs = await _getCustomArgs();
 
       // 2. Arguments de base pour yt-dlp avec usurpation d'identité pour extraire les en-têtes réseau
       List<String> args = [
@@ -63,6 +95,7 @@ class YtdlpService {
         '--dump-json',
         '--impersonate',
         'chrome',
+        ...customArgs,
       ];
 
       // 3. Arguments spécifiques aux listes de lecture vs vidéos simples
@@ -83,20 +116,11 @@ class YtdlpService {
       }
       args.add(url);
 
-      // 4. Exécution de la commande avec mécanisme de secours pour l'erreur 403
+      // 4. Exécution de la commande
       ProcessResult result = await Process.run(executable, args);
-      if (result.exitCode != 0 && result.stderr.toString().contains('403')) {
-        final retryArgs = [
-          ...args.sublist(0, args.length - 1),
-          '--impersonate',
-          'chrome',
-          url
-        ];
-        result = await Process.run(executable, retryArgs);
-      }
 
       if (result.exitCode != 0) {
-        lastError = _extractUserFriendlyError(result.stderr.toString());
+        lastError = _extractUserFriendlyError(result.stderr.toString(), result.stdout.toString());
         return null;
       }
 
@@ -282,6 +306,7 @@ class YtdlpService {
     final binFolder = await ComponentManager.getTargetFolderPath();
     final ffmpegPath = p.join(binFolder, ComponentManager.getFfmpegFileName());
     final (executable, initialArgs) = _getVenvCommand(binFolder);
+    final customArgs = await _getCustomArgs();
 
     // Intégration des options de résilience infinie du script Python
     List<String> arguments = [
@@ -291,7 +316,8 @@ class YtdlpService {
       '--retries',
       'infinite',
       '--fragment-retries',
-      'infinite'
+      'infinite',
+      ...customArgs,
     ];
 
     // 🚀 AJOUT PRINCIPAL : On force yt-dlp à renommer le fichier sur le disque
@@ -304,6 +330,7 @@ class YtdlpService {
       arguments.addAll(['-o', '%(title)s.mp4']);
     }
 
+    final ext = format?.ext.toLowerCase() ?? '';
     if (format?.ext == 'mp3') {
       arguments.addAll([
         '--extract-audio',
@@ -313,7 +340,15 @@ class YtdlpService {
         format?.formatId ?? 'bestaudio/best'
       ]);
     } else if (format != null) {
-      arguments.addAll(['-f', format.formatId, '--merge-output-format', 'mp4']);
+      if (ext == 'm3u8' || ext == 'ts' || ext == 'm4s') {
+        arguments.addAll([
+          '--hls-prefer-native',
+          '-f',
+          format.formatId.isNotEmpty ? format.formatId : 'best',
+        ]);
+      } else {
+        arguments.addAll(['-f', format.formatId, '--merge-output-format', 'mp4']);
+      }
     } else {
       arguments.addAll(['-f', 'bv*+ba/b', '--merge-output-format', 'mp4']);
     }
@@ -344,18 +379,20 @@ class YtdlpService {
     return process;
   }
 
-  static String _extractUserFriendlyError(String stderr) {
-    if (stderr.isEmpty) return "Analyse échouée. Vérifiez l'URL.";
+  static String _extractUserFriendlyError(String stderr, String stdout) {
+    final fullOutput = '$stderr\n$stdout';
+    if (fullOutput.trim().isEmpty) return "Analyse échouée. Vérifiez l'URL.";
+
     if (stderr.contains('Unsupported URL')) return "URL non supportée.";
 
     final errorLines = stderr
         .split('\n')
         .where((l) => l.toLowerCase().contains('error:'))
         .toList();
-
+    
     if (errorLines.isNotEmpty) {
       final relevantError = errorLines.first
-          .replaceFirst(RegExp(r'ERROR:\s*', caseSensitive: false), '')
+          .replaceFirst(RegExp(r'^error:\s*', caseSensitive: false), '')
           .trim();
       if (relevantError.contains("Unable to extract")) {
         return "Extraction impossible sur cette page.";
@@ -363,6 +400,14 @@ class YtdlpService {
       return relevantError;
     }
 
-    return "Erreur d'analyse inconnue.";
+    // Fallback sur la dernière ligne si aucune erreur formelle n'est trouvée
+    final lines = fullOutput.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isNotEmpty) {
+      final lastLine = lines.last.trim();
+      // Tronquer les messages trop longs
+      return lastLine.length > 150 ? '${lastLine.substring(0, 147)}...' : lastLine;
+    }
+
+    return "Erreur d'analyse inconnue. Vérifiez la console pour plus de détails.";
   }
 }

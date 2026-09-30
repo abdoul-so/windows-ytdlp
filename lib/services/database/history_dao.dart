@@ -7,8 +7,8 @@ extension HistoryDao on AppDatabase {
   // ── Lecture ──────────────────────────────────────────────────────────────
 
   /// Retourne tous les entrées de l'historique, du plus récent au plus ancien.
-  Future<List<DownloadHistoryTableData>> getHistory({int limit = 100}) {
-    return (select(downloadHistoryTable)
+  Future<List<HistoryTableData>> getHistory({int limit = 100}) {
+    return (select(historyTable)
           ..orderBy([
             (t) => OrderingTerm(
                 expression: t.downloadedAt, mode: OrderingMode.desc)
@@ -27,14 +27,14 @@ extension HistoryDao on AppDatabase {
     String formatExt = 'mp4',
     String targetFolder = '',
   }) {
-    return into(downloadHistoryTable).insert(
-      DownloadHistoryTableCompanion.insert(
+    return into(historyTable).insert(
+      HistoryTableCompanion.insert(
         title: title,
         url: url,
-        downloadedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        type: Value(type),
+        downloadedAt: Value(DateTime.now().millisecondsSinceEpoch ~/ 1000),
+        type: type,
         formatExt: Value(formatExt),
-        targetFolder: Value(targetFolder),
+        targetFolder: targetFolder,
       ),
     );
   }
@@ -43,18 +43,18 @@ extension HistoryDao on AppDatabase {
 
   /// Supprime un élément de l'historique par son ID.
   Future<int> deleteHistoryEntry(int id) {
-    return (delete(downloadHistoryTable)..where((t) => t.id.equals(id))).go();
+    return (delete(historyTable)..where((t) => t.id.equals(id))).go();
   }
 
   /// Vide tout l'historique.
   Future<int> clearHistory() {
-    return delete(downloadHistoryTable).go();
+    return delete(historyTable).go();
   }
 
   /// Met à jour le titre d'une entrée de l'historique par son ID.
   Future<bool> updateHistoryTitle(int id, String newTitle) {
-    return (update(downloadHistoryTable)..where((t) => t.id.equals(id)))
-        .write(DownloadHistoryTableCompanion(
+    return (update(historyTable)..where((t) => t.id.equals(id)))
+        .write(HistoryTableCompanion(
           title: Value(newTitle),
         ))
         .then((rows) => rows > 0);

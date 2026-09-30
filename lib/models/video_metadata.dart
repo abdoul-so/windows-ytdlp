@@ -34,6 +34,19 @@ class VideoMetadata {
     );
   }
 
+  Map<String, dynamic> toJson() {
+    return {
+      '_type': isPlaylist ? 'playlist' : 'video',
+      'title': title,
+      'thumbnail': thumbnail,
+      'formats': formats.map((f) => f.toJson()).toList(),
+      'entries': playlistVideos.map((e) => e.toJson()).toList(),
+      'playlist_count': playlistCount,
+      // On ajoute 'duration' pour être cohérent avec le parsing
+      'duration': formats.isNotEmpty ? formats.first.duration : null,
+    };
+  }
+
   factory VideoMetadata.fromJson(Map<String, dynamic> json) {
     if (json['_type'] == 'playlist' || json['entries'] != null) {
       var entriesList = json['entries'] as List? ?? [];
@@ -64,11 +77,12 @@ class VideoMetadata {
         .map((i) => FileFormat.fromJson(i, globalDuration: globalDuration))
         .toList();
 
-    // Filtre souple : On accepte tout format lisible ayant une hauteur ou une piste audio valide.
-    formatList = formatList
-        .where((f) =>
-            f.formatId.isNotEmpty && (f.height != null || f.acodec != 'none'))
-        .toList();
+    // Filtre souple : on accepte aussi les formats de flux directs (m3u8/ts) même sans hauteur.
+    formatList = formatList.where((f) {
+      if (f.formatId.isEmpty) return false;
+      final isDirectStream = ['m3u8', 'ts', 'mp4', 'm4s', 'webm'].contains(f.ext.toLowerCase());
+      return f.height != null || f.acodec != 'none' || isDirectStream;
+    }).toList();
 
     return VideoMetadata(
       title: json['title'] ?? 'Vidéo inconnue',
@@ -90,6 +104,15 @@ class PlaylistEntry {
     required this.thumbnail,
     required this.index, // 🚀 Requis dans le constructeur
   });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'webpage_url': url,
+      'thumbnail': thumbnail,
+      'playlist_index': index,
+    };
+  }
 
   factory PlaylistEntry.fromJson(Map<String, dynamic> json) {
     String foundUrl = json['webpage_url'] ?? json['url'] ?? '';
@@ -131,6 +154,18 @@ class FileFormat {
     this.tbr,
     this.duration,
   });
+
+  Map<String, dynamic> toJson() => {
+        'format_id': formatId,
+        'ext': ext,
+        'filesize': filesize,
+        'height': height,
+        'vcodec': vcodec,
+        'acodec': acodec,
+        'display_label': displayLabel,
+        'tbr': tbr,
+        'duration': duration,
+      };
 
   factory FileFormat.fromJson(Map<String, dynamic> json,
       {int? globalDuration}) {
