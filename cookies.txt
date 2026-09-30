@@ -1,0 +1,9 @@
+# Exemple de fichier cookies.txt au format Netscape
+# Remplace les valeurs par celles de ton navigateur ou de ton export de cookies.
+# Ne publie jamais ce fichier si les cookies contiennent des informations sensibles.
+
+# Domain	Flag	Path	Secure	Expiration	Name	Value
+.eporner.video	TRUE	/	TRUE	1700000000	__cf_bm	EXEMPLE_CCF_BM_VALUE
+.eporner.video	TRUE	/	TRUE	1700000000	__cfruid	EXEMPLE_CFRUID_VALUE
+.eporner.video	TRUE	/	TRUE	1700000000	sessionid	EXEMPLE_SESSIONID_VALUE
+.eporner.video	TRUE	/	TRUE	1700000000	nid	EXEMPLE_NID_VALUE
